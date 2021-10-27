@@ -1,0 +1,130 @@
+---
+title: "Significance Testing Guidelines"
+author: "Alberto Gualtieri"
+date: "5/31/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+options(scipen=999)
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(stats)
+library(weights)
+library(AICcmodavg)
+library(chisq.posthoc.test)
+
+data <- read.csv("./inputs/UKR2007_MSNA20_HH_dataset_main_rcop.csv", stringsAsFactors = FALSE)
+
+# Generate extra numeric values to simplify analysis
+data <- data %>% mutate(fcs_cat = case_when(
+                                            fcs >= 0 & fcs <= 28 ~ "Poor",
+                                            fcs >= 29 & fcs <= 42 ~ "Borderline",
+                                            fcs >= 43 ~ "Acceptable",
+                                            TRUE ~ NA_character_))
+
+```
+
+
+
+## T-test and weighted T-test
+
+
+```{r t.test, echo=FALSE}
+# Test in FCS score between household with debt and household without debt
+
+fcs.m <- data[data$b8_hohh_sex =="male",]$fcs
+fcs.f <- data[data$b8_hohh_sex =="female",]$fcs
+
+t.test(fcs.m, fcs.f)
+
+data <- data %>% mutate(fcs_m = ifelse(b8_hohh_sex == "male", fcs, NA_integer_))
+data <- data %>% mutate(fcs_f = ifelse(b8_hohh_sex == "female", fcs, NA_integer_))
+data <- data %>% mutate(fcs_m_w = ifelse(b8_hohh_sex == "male", stratum.weight, NA_integer_))
+data <- data %>% mutate(fcs_f_w = ifelse(b8_hohh_sex == "female", stratum.weight, NA_integer_))
+
+wtd.t.test(data$fcs_m, data$fcs_f, weight = data$fcs_m_w, weighty = data$fcs_f_w, samedata = FALSE)
+
+
+```
+
+## ANOVA
+
+```{r anova, echo=FALSE}
+# One-way ANOVA + Means comparisons
+data_aov <- aov(data$b15_hohh_income~factor(data$b9_hohh_marital_status))
+summary(data_aov)
+
+stats::TukeyHSD(data_aov)
+
+# Two-way ANOVA + Means comparisons
+data <- data %>% mutate(debt_yn = case_when(
+                                  n3_in_debt == "yes" ~ "yes",
+                                  n3_in_debt == "no" ~ "no",
+                                  TRUE ~ NA_character_
+                                  ))
+# No interaction
+two_aov <- aov(data$b15_hohh_income~factor(data$b9_hohh_marital_status) + factor(data$debt_yn))
+summary(two_aov)
+
+# Means comparison
+stats::TukeyHSD(two_aov)
+
+# With interaction
+two_aov_int <- aov(data$b15_hohh_income~factor(data$b9_hohh_marital_status) * factor(data$debt_yn))
+summary(two_aov_int)
+
+# Akaike
+names <- c("no interaction", "interaction")
+aictab(list(two_aov, two_aov_int), modnames = names)
+
+```
+## Chi Square
+
+```{r chi.square, echo=FALSE}
+chi.sqr <- chisq.test(factor(data$fcs_cat), factor(data$debt_yn))
+chi.sqr
+
+chi.sqr.table <- as.data.frame(unclass(table(data$fcs_cat, data$debt_yn)))
+
+chisq.posthoc.test(chi.sqr.table, "none")
+
+w.chi.sqr <- wtd.chi.sq(factor(data$fcs_cat), factor(data$debt_yn), weight = data$stratum.weight)
+w.chi.sqr 
+
+```
+
+## Regressions
+```{r regressions, echo=FALSE}
+## Linear Regression
+l.reg <- lm(fcs ~ b15_hohh_income, data = data)
+summary(l.reg)
+
+wl.reg <- lm(fcs ~ b15_hohh_income, data = data, weights = stratum.weight)
+summary(wl.reg)
+
+
+## Multiple Regression
+m.reg <- lm(fcs ~ b9_hohh_marital_status + b8_hohh_sex + b7_hohh_age, data = data)
+summary(m.reg)
+
+wm.reg <- lm(fcs ~ b9_hohh_marital_status + b8_hohh_sex + b7_hohh_age, data = data, weights = stratum.weight)
+summary(wm.reg)
+
+
+## Logistic Regression
+data <- data %>% mutate(debt_yn = case_when(
+                                  n3_in_debt == "yes" ~ 1,
+                                  n3_in_debt == "no" ~ 0,
+                                  TRUE ~ NA_real_
+                                  ))
+
+
+logit <- glm(debt_yn ~ b9_hohh_marital_status, family = "binomial", data = data)
+summary(logit)
+
+exp(cbind(OR = coef(logit), confint(logit)))
+
+
+```
